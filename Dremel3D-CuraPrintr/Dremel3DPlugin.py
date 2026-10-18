@@ -1,11 +1,12 @@
 from cura.CuraApplication import CuraApplication
 
-from UM.Logger import Logger
 from UM.Extension import Extension
+from UM.Logger import Logger
 from UM.OutputDevice.OutputDevicePlugin import OutputDevicePlugin
 
+from .Dremel3DMonitor import Dremel3DMonitor
 from .Dremel3DOutputDevice import Dremel3DConfigureOutputDevice, Dremel3DOutputDevice
-from .Dremel3DSettings import get_config, init_config, DREMEL3D_SETTINGS
+from .Dremel3DSettings import get_config, init_config
 
 
 class Dremel3DPlugin(Extension, OutputDevicePlugin):
@@ -16,6 +17,10 @@ class Dremel3DPlugin(Extension, OutputDevicePlugin):
             self._checkDremel3DOutputDevices
         )
         init_config()
+
+        self._monitor = Dremel3DMonitor()
+        self.addMenuItem("Printer Status", self._monitor.show_snapshot)
+        self.addMenuItem("Cancel Print", self._monitor.requestCancel)
 
     def _checkDremel3DOutputDevices(self):
         global_container_stack = self._application.getGlobalContainerStack()
@@ -36,8 +41,10 @@ class Dremel3DPlugin(Extension, OutputDevicePlugin):
                     global_container_stack.getId(), global_container_stack.getName()
                 ),
             )
-            manager.addOutputDevice(Dremel3DOutputDevice(config))
+            self._monitor.setUrl(config.get("url", ""))
+            manager.addOutputDevice(Dremel3DOutputDevice(config, self._monitor))
         else:
+            self._monitor.setUrl("")
             manager.addOutputDevice(Dremel3DConfigureOutputDevice())
             Logger.log(
                 "d",

@@ -13,6 +13,13 @@ Download repo and copy the `Dremel3D-CuraPrintr` folder into your plugin folder.
 
 Inside printer settings click Connect Dremel, and fill out printer's IP address.
 
+### Monitoring
+
+While a print is running Cura shows a message with the job name, progress, time
+left and temperatures, polled from the printer every few seconds. Use
+**Extensions → Dremel3D Upload → Printer Status** to see the status on demand,
+and **Cancel Print** to stop the job that is running on the configured printer.
+
 ### Research
 
 You my learnings about the dremel 3d printer in the Research.md file. It includes different API endpoints and values for those via network interception.
