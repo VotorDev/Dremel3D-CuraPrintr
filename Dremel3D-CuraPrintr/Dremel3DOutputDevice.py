@@ -1,18 +1,14 @@
-import base64
-import json
 import os.path
-import urllib
 from enum import Enum
 from io import BytesIO, StringIO
 from typing import cast
 
 from cura.CuraApplication import CuraApplication
 
-from PyQt6.QtCore import QByteArray, QObject, QUrl, QVariant
+from PyQt6.QtCore import QByteArray, QUrl, QVariant
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtNetwork import QHttpMultiPart, QHttpPart, QNetworkReply, QNetworkRequest
 
-from UM.Application import Application
 from UM.i18n import i18nCatalog
 from UM.Logger import Logger
 from UM.Mesh.MeshWriter import MeshWriter
@@ -21,7 +17,15 @@ from UM.OutputDevice import OutputDeviceError
 from UM.OutputDevice.OutputDevice import OutputDevice
 from UM.PluginRegistry import PluginRegistry
 
+from .Dremel3DProtocol import print_command, safe_file_name
+
 catalog = i18nCatalog("cura")
+
+# The printer is a LAN device: fail fast instead of leaving the output device
+# busy forever on an unreachable printer.
+REACHABILITY_TIMEOUT_S = 5
+UPLOAD_TIMEOUT_S = 300
+COMMAND_TIMEOUT_S = 5
 
 
 class OutputStage(Enum):
@@ -47,11 +51,12 @@ class Dremel3DConfigureOutputDevice(OutputDevice):
 
 
 class Dremel3DOutputDevice(OutputDevice):
-    def __init__(self, config):
+    def __init__(self, config, monitor=None):
         self._name_id = "dremel3d-upload"
         super().__init__(self._name_id)
 
         self._url = config.get("url", "")
+        self._monitor = monitor
 
         self.application = CuraApplication.getInstance()
         global_container_stack = self.application.getGlobalContainerStack()
@@ -83,7 +88,6 @@ class Dremel3DOutputDevice(OutputDevice):
         self.writeStarted.emit(self)
 
         # The presliced print should always be send using `GCodeWriter`
-        print_info = CuraApplication.getInstance().getPrintInformation()
         self._output_format = "gcode"
         code_writer = cast(
             MeshWriter, PluginRegistry.getInstance().getPluginObject("GCodeWriter")
@@ -94,75 +98,19 @@ class Dremel3DOutputDevice(OutputDevice):
             Logger.log("e", "MeshWriter failed: %s" % code_writer.getInformation())
             return
 
-        # Prepare filename for upload
-        if fileName:
-            fileName = os.path.basename(fileName)
-        else:
-            fileName = "%s." % Application.getInstance().getPrintInformation().jobName
+        # Cura suggests the job name without an extension (see
+        # OutputDevicesActionButton.qml), so normalise it into a name that is
+        # safe in the upload's multipart header.
+        if not fileName:
+            fileName = self.application.getPrintInformation().jobName
+        self._fileName = safe_file_name(
+            os.path.basename(fileName), self._output_format
+        )
 
-        self._fileName = fileName + "." + self._output_format
-
-        # Display upload dialog
-        #path = os.path.join(
-        #    os.path.dirname(os.path.abspath(__file__)),
-        #    "resources",
-        #    "qml",
-        #    "Dremel3DUpload.qml",
-        #)
-        #self._dialog = CuraApplication.getInstance().createQmlComponent(
-        #    path, {"manager": self}
-        #)
-        #self._dialog.textChanged.connect(self.onFilenameChanged)
-        #self._dialog.accepted.connect(self.onFilenameAccepted)
-        #self._dialog.show()
-        #self._dialog.findChild(QObject, "nameField").setProperty("text", self._fileName)
-        #self._dialog.findChild(QObject, "nameField").select(
-        #    0, len(self._fileName) - len(self._output_format) - 1
-        #)
-        #self._dialog.findChild(QObject, "nameField").setProperty("focus", True)
-
-        ## TODO: just upload directly here
         self._startPrint = True
         self.startUploading()
 
-    def onFilenameChanged(self):
-        fileName = self._dialog.findChild(QObject, "nameField").property("text").strip()
-        fileName = self._dialog.findChild(QObject, "nameField").property("text").strip()
-
-        forbidden_characters = '\\/:*?"<>|'
-        for forbidden_character in forbidden_characters:
-            if forbidden_character in fileName:
-                self._dialog.setProperty("validName", False)
-                self._dialog.setProperty(
-                    "validationError", "*cannot contain {}".format(forbidden_characters)
-                )
-                return
-
-        if fileName == "." or fileName == "..":
-            self._dialog.setProperty("validName", False)
-            self._dialog.setProperty("validationError", '*cannot be "." or ".."')
-            return
-
-        self._dialog.setProperty("validName", len(fileName) > 0)
-        self._dialog.setProperty("validationError", "Filename too short")
-
     def startUploading(self):
-        #self._fileName = (
-        #    self._dialog.findChild(QObject, "nameField").property("text").strip()
-        #)
-        #if (
-        #    not self._fileName.endswith("." + self._output_format)
-        #    and "." not in self._fileName
-        #):
-        #    self._fileName += "." + self._output_format
-        #Logger.log("d", "Filename set to: " + self._fileName)
-
-        #self._startPrint = self._dialog.findChild(QObject, "printField").property(
-        #    "checked"
-        #)
-        #Logger.log("d", "Print set to: " + str(self._startPrint))
-
-        #self._dialog.deleteLater()
         self._stage = OutputStage.writing
 
         # show a progress message
@@ -174,13 +122,15 @@ class Dremel3DOutputDevice(OutputDevice):
         )
         self._message.show()
         Logger.log("d", "Connecting to Dremel...")
-        self._sendRequest("", on_success=self.onInstanceOnline)
+        self._sendRequest(
+            "", on_success=self.onInstanceOnline, timeout=REACHABILITY_TIMEOUT_S
+        )
 
     def onInstanceOnline(self, reply):
         if self._stage != OutputStage.writing:
             return
         if reply.error() != QNetworkReply.NetworkError.NoError:
-            Logger.log("d", "Stopping due to reply error: " + reply.error())
+            self._onNetworkError(reply, reply.error())
             return
 
         Logger.log("d", "Uploading " + self._output_format + "...")
@@ -195,46 +145,64 @@ class Dremel3DOutputDevice(OutputDevice):
             name=self._fileName,
             data=self._postData,
             on_success=self.onCodeUploaded,
+            timeout=UPLOAD_TIMEOUT_S,
         )
 
     def onCodeUploaded(self, reply):
         if self._stage != OutputStage.writing:
             return
         if reply.error() != QNetworkReply.NetworkError.NoError:
-            Logger.log("d", "Stopping due to reply error: " + reply.error())
+            self._onNetworkError(reply, reply.error())
             return
 
         Logger.log("d", "Upload completed")
         self._stream.close()
         self._stream = None
 
-        if self._startPrint and self._startPrint == True:
-
-            data = QByteArray()
-            data.append(bytes("PRINT={}".format(self._fileName), encoding="utf-8"))
-
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Connection": "Keep-Alive",
-            }
-
-            req = QNetworkRequest(QUrl())
-            req.setHeader(
-                QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/x-www-form-urlencoded"
+        if self._startPrint:
+            self._sendCommand(print_command(self._fileName))
+            if self._monitor:
+                self._monitor.expect_print(self._fileName)
+            self._showResult(
+                catalog.i18nc(
+                    "@info:status", "Uploaded '{}' - starting the print."
+                ).format(self._fileName)
             )
-            self.application.getHttpRequestManager().post(
-                self._url + "command",
-                headers,
-                data,
-                callback=None,
-                error_callback=self._onNetworkError,
-            )
-
-            self.writeSuccess.emit(self)
-            self._resetState()
         else:
-            self.writeSuccess.emit(self)
-            self._resetState()
+            self._showResult(
+                catalog.i18nc("@info:status", "Uploaded '{}' to {}.").format(
+                    self._fileName, self._name
+                )
+            )
+
+        self.writeSuccess.emit(self)
+        self._resetState()
+
+    def _sendCommand(self, command: str):
+        """POST one command, e.g. PRINT=<file>."""
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Connection": "Keep-Alive",
+        }
+        data = QByteArray()
+        data.append(command.encode("utf-8"))
+        self.application.getHttpRequestManager().post(
+            self._url + "command",
+            headers,
+            data,
+            callback=None,
+            error_callback=self._onNetworkError,
+            timeout=COMMAND_TIMEOUT_S,
+        )
+
+    def _showResult(self, text: str):
+        self._hide_message()
+        Message(text, lifetime=10, dismissable=True).show()
+
+    def _hide_message(self):
+        if self._message:
+            self._message.hide()
+            self._message = None
 
     def _onProgress(self, progress):
         if self._message:
@@ -250,13 +218,12 @@ class Dremel3DOutputDevice(OutputDevice):
         self._fileName = None
         self._startPrint = None
         self._postData = None
+        self._hide_message()
 
     def _onMessageActionTriggered(self, message, action):
         if action == "open_browser":
             QDesktopServices.openUrl(QUrl(self._url))
-            if self._message:
-                self._message.hide()
-                self._message = None
+            self._hide_message()
 
     def _onUploadProgress(self, bytesSent, bytesTotal):
         if bytesTotal > 0:
@@ -264,9 +231,7 @@ class Dremel3DOutputDevice(OutputDevice):
 
     def _onNetworkError(self, reply, error):
         Logger.log("e", repr(error))
-        if self._message:
-            self._message.hide()
-            self._message = None
+        self._hide_message()
 
         errorString = ""
         if reply:
@@ -284,7 +249,7 @@ class Dremel3DOutputDevice(OutputDevice):
         self.writeError.emit(self)
         self._resetState()
 
-    def _sendRequest(self, path, name=None, data=None, on_success=None, on_error=None):
+    def _sendRequest(self, path, name=None, data=None, on_success=None, on_error=None, timeout=None):
         url = self._url + path
 
         headers = {
@@ -315,6 +280,7 @@ class Dremel3DOutputDevice(OutputDevice):
                 callback=on_success,
                 error_callback=on_error if on_error else self._onNetworkError,
                 upload_progress_callback=self._onUploadProgress,
+                timeout=timeout,
             )
         else:
             self.application.getHttpRequestManager().get(
@@ -322,4 +288,5 @@ class Dremel3DOutputDevice(OutputDevice):
                 headers,
                 callback=on_success,
                 error_callback=on_error if on_error else self._onNetworkError,
+                timeout=timeout,
             )
