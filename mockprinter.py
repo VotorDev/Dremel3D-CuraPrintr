@@ -64,4 +64,4 @@ def command():
     return "ok"
 
 
-app.run()
+app.run(port=int(os.environ.get("PORT", 5000)))
