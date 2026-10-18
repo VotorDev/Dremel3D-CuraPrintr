@@ -1,3 +1,4 @@
+import json
 import os
 from flask import Flask, flash, request, redirect, url_for
 from werkzeug.utils import secure_filename
@@ -29,9 +30,37 @@ def file():
         return "ok saved"
 
 
+# Shape of a real 3D40 answer to GETPRINTERSTATUS, including its "elaspedtime"
+# typo and the trailing space in "filament_type ".
+STATUS = {
+    "buildPlate_target_temperature": 0,
+    "chamber_temperature": 0,
+    "door_open": 0,
+    "elaspedtime": 0,
+    "error_code": 200,
+    "extruder_target_temperature": 220,
+    "fanSpeed": 0,
+    "filament_type ": "PLA",
+    "firmware_version": "v1.0_R03.06.06",
+    "jobname": "D3_3DBenchy.gcode",
+    "jobstatus": "building",
+    "layer": 7,
+    "message": "success",
+    "networkBuild": 1,
+    "platform_temperature": 60,
+    "progress": 14,
+    "remaining": 1501,
+    "status": "busy",
+    "temperature": 219,
+    "totalTime": 1750,
+}
+
+
 @app.route("/command", methods=["POST"])
 def command():
     print(request.form)
+    if "GETPRINTERSTATUS" in request.form:
+        return json.dumps(STATUS)
     return "ok"
 
 
