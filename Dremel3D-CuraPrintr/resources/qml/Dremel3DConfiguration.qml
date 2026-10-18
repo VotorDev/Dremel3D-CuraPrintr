@@ -23,7 +23,6 @@ Cura.MachineAction
     property var selectedInstance: null
 
     property bool validUrl: true;
-    property bool validTrans: true;
 
     Component.onCompleted: {
         actionDialog.minimumWidth = screenScaleFactor * 580;
@@ -69,7 +68,7 @@ Cura.MachineAction
                     manager.saveConfig(urlField.text);
                     actionDialog.reject();
                 }
-                enabled: base.validUrl & base.validTrans;
+                enabled: base.validUrl;
             }
 
             Button {

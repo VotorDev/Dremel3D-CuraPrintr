@@ -1,7 +1,6 @@
 import os
-import json
 import re
-from typing import Dict, Type, TYPE_CHECKING, List, Optional, cast
+from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtProperty, pyqtSignal
 
@@ -37,19 +36,14 @@ class Dremel3DAction(MachineAction):
 
     def _onGlobalContainerStackChanged(self) -> None:
         self.printerSettingsUrlChanged.emit()
-        self.printerSettingsAPIKeyChanged.emit()
-        self.printerSettingsHTTPUserChanged.emit()
-        self.printerSettingsHTTPPasswordChanged.emit()
-        self.printerOutputFormatChanged.emit()
-        self.printerTransInputChanged.emit()
-        self.printerTransOutputChanged.emit()
-        self.printerTransRemoveChanged.emit()
 
     def _onContainerAdded(self, container: "ContainerInterface") -> None:
-        # Add this action as a supported action to all machine definitions
+        # The Dremel definitions are named "Dremel3D40", "Dremel3D45", ...
+        # Matching on the definition's id keeps this action off other printers.
         if (
             isinstance(container, DefinitionContainer)
             and container.getMetaDataEntry("type") == "machine"
+            and container.getId().startswith("Dremel")
         ):
             self._application.getMachineActionManager().addSupportedAction(
                 container.getId(), self.getKey()
@@ -57,77 +51,14 @@ class Dremel3DAction(MachineAction):
 
     def _reset(self) -> None:
         self.printerSettingsUrlChanged.emit()
-        self.printerSettingsAPIKeyChanged.emit()
-        self.printerSettingsHTTPUserChanged.emit()
-        self.printerSettingsHTTPPasswordChanged.emit()
-        self.printerOutputFormatChanged.emit()
-        self.printerTransInputChanged.emit()
-        self.printerTransOutputChanged.emit()
-        self.printerTransRemoveChanged.emit()
 
     printerSettingsUrlChanged = pyqtSignal()
-    printerSettingsAPIKeyChanged = pyqtSignal()
-    printerSettingsHTTPUserChanged = pyqtSignal()
-    printerSettingsHTTPPasswordChanged = pyqtSignal()
-    printerOutputFormatChanged = pyqtSignal()
-    printerTransInputChanged = pyqtSignal()
-    printerTransOutputChanged = pyqtSignal()
-    printerTransRemoveChanged = pyqtSignal()
 
     @pyqtProperty(str, notify=printerSettingsUrlChanged)
     def printerSettingUrl(self) -> Optional[str]:
         s = get_config()
         if s:
             return s.get("url", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerSettingsAPIKeyChanged)
-    def printerSettingAPIKey(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("api_key", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerSettingsHTTPUserChanged)
-    def printerSettingHTTPUser(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("http_user", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerSettingsHTTPPasswordChanged)
-    def printerSettingHTTPPassword(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("http_password", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerOutputFormatChanged)
-    def printerOutputFormat(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("output_format", "gcode")
-        return "gcode"
-
-    @pyqtProperty(str, notify=printerTransInputChanged)
-    def printerTransInput(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("trans_input", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerTransOutputChanged)
-    def printerTransOutput(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("trans_output", "")
-        return ""
-
-    @pyqtProperty(str, notify=printerTransRemoveChanged)
-    def printerTransRemove(self) -> Optional[str]:
-        s = get_config()
-        if s:
-            return s.get("trans_remove", "")
         return ""
 
     @pyqtSlot(str)
@@ -161,13 +92,6 @@ class Dremel3DAction(MachineAction):
             return False
         if "@" in newUrl:
             # @ is probably HTTP basic auth, which is a separate setting
-            return False
-
-        return True
-
-    @pyqtSlot(str, str, result=bool)
-    def validTrans(self, newTransInput, newTransOutput):
-        if len(newTransInput) != len(newTransOutput):
             return False
 
         return True
