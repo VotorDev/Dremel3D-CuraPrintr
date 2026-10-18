@@ -22,6 +22,15 @@ class Dremel3DPlugin(Extension, OutputDevicePlugin):
         self.addMenuItem("Printer Status", self._monitor.show_snapshot)
         self.addMenuItem("Cancel Print", self._monitor.requestCancel)
 
+    def start(self) -> None:
+        # OutputDevicePlugin.start() raises unless a plugin implements it, so
+        # without this every Cura start logs an exception. It is also the right
+        # moment to register the devices for an already active printer.
+        self._checkDremel3DOutputDevices()
+
+    def stop(self) -> None:
+        self._monitor.stop()
+
     def _checkDremel3DOutputDevices(self):
         global_container_stack = self._application.getGlobalContainerStack()
         if not global_container_stack:
